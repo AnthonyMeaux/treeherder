@@ -1,5 +1,20 @@
-#!/bin/bash -e
+#!/usr/bin/env bash
 # Tasks run by the Heroku Python buildpack after the compile step.
+
+# Make non-zero exit codes & other errors fatal.
+set -euo pipefail
+
+# The post_compile script is run in a sub-shell, so we need to source the
+# buildpack's utils script again, so we can use set-env/set-default-env:
+# https://github.com/heroku/heroku-buildpack-python/blob/master/bin/utils
+source $BIN_DIR/utils
+
+# Check libmysqlclient is built against the version of MySQL we are expecting.
+MYSQL_VERSION="$(python -c 'from _mysql import get_client_info; print(get_client_info())' 2>&1 || true)"
+if [[ "$MYSQL_VERSION" != "5.7.14" ]]; then
+    puts-warn "mysqlclient compiled against incorrect libmysqlclient: $MYSQL_VERSION"
+    exit 1
+fi
 
 # Create a `dist/` directory containing built/minified versions of the `ui/` assets.
 # Uses the node binaries/packages installed by the nodejs buildpack previously.
@@ -13,11 +28,6 @@ echo $SOURCE_VERSION > dist/revision.txt
 # since WhiteNoise's Django storage backend only gzips assets handled by
 # collectstatic, and so does not affect files in the `dist/` directory.
 python -m whitenoise.compress dist
-
-# The post_compile script is run in a sub-shell, so we need to source the
-# buildpack's utils script again, so we can use set-env/set-default-env:
-# https://github.com/heroku/heroku-buildpack-python/blob/master/bin/utils
-source $BIN_DIR/utils
 
 # Add environment variables to the profile script run on Dyno startup.
 # Only variables that are rarely changed and not site-specific should

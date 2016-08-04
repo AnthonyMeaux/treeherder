@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# Tasks run by the Heroku Python buildpack prior to the compile step.
+
+# The Heroku cedar-14 stack comes with libmysqlclient 5.5.x (since that's the
+# latest release available for Ubuntu 14.04 via the distro), which is vulnerable
+# to TLS stripping (CVE-2015-3152):
+#   https://github.com/PyMySQL/mysqlclient-python/issues/98
+#   http://bugs.mysql.com/bug.php?id=82383
+#   https://help.heroku.com/tickets/376633
+# As such, we have to manually download the mysql 5.7.x release from mysql.com,
+# at least until Heroku release a stack based on Ubuntu 16.04, whose distro
+# packages are based on mysql 5.7.x.
+# The pip install of mysqlclient will use the updated library in preference to
+# the system one, since it uses `mysql_config` from PATH, which during compile
+# includes `/app/.heroku/vendor/bin` prior to `/usr/bin`.
+
+# Make non-zero exit codes & other errors fatal.
+set -euo pipefail
+
+VENDOR_DIR=".heroku/vendor"
+
+# Return early if our updated libmysqlclient already exists.
+# We have to check in `$CACHE_DIR`, since `pre_compile` is
+# run prior to moving the old cache contents into `/app`.
+if [ -f "$CACHE_DIR/$VENDOR_DIR/bin/mysql_config" ]; then
+    exit 0
+fi
+
+echo "-----> Bootstrapping libmysqlclient from mysql.com"
+
+# NB: If the version is updated here, update the check in `post_compile` too,
+# and clear the repo cache so that mysqlclient is rebuilt:
+#   https://github.com/heroku/heroku-repo#purge_cache
+# This could be automated, but probably not worth it, given Ubuntu 16.04 incoming.
+LIBMYSQLCLIENT_URL="https://cdn.mysql.com/Downloads/MySQL-5.7/libmysqlclient20_5.7.14-1ubuntu14.04_amd64.deb"
+LIBMYSQLCLIENT_DEV_URL="https://cdn.mysql.com/Downloads/MySQL-5.7/libmysqlclient-dev_5.7.14-1ubuntu14.04_amd64.deb"
+
+vendor_deb_package() {
+    # We don't have sudo on Heroku, and the compiled binary releases of
+    # libmysqlclient are only available as a Debian style package, which
+    # can't be installed as-is, since it requires write access to /usr
+    # and various other directories. As such, we use dpkg-deb to extract
+    # the data part of the package as a tarfile-like stream, so we can
+    # more precisely control which files are extracted and to where.
+    # The archives' original paths are of form:
+    #   /./usr/bin/
+    #   /./usr/include/
+    #   /./usr/lib/x86_64-linux-gnu/
+    # We use `--strip-components=2` to remove the `/./usr/` prefix, meaning
+    # the package contents are extracted directly into the existing `lib/`,
+    # `include/` and `bin/` directory structure Heroku uses for other
+    # vendored libraries. The `share` directory isn't used, so we exclude it.
+    URL="$1"
+    curl -s "$URL" \
+      | dpkg-deb --fsys-tarfile /dev/stdin \
+      | tar -x --strip-components=2 --exclude="./usr/share" -C "$VENDOR_DIR"
+}
+
+mkdir -p "$VENDOR_DIR"
+vendor_deb_package "$LIBMYSQLCLIENT_URL"
+vendor_deb_package "$LIBMYSQLCLIENT_DEV_URL"
+
+# The `pre_compile` script is run in a sub-shell, so any changes we make to
+# `LD_LIBRARY_PATH` won't persist through to later steps. As such, we have to
+# add a symlink to ensure Python can find the libmysqlclient shared library
+# at runtime. Otherwise we'd simply do something like:
+#   export LD_LIBRARY_PATH="$VENDOR_DIR/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
+# Note: We can't just flatten the directory structure, since the `mysql_config`
+# that comes with libmysqlclient-dev expects the compiled shared library to be
+# in a directory named `x86_64-linux-gnu`, whereas Python will be looking in the
+# parent `lib` directory only, since it doesn't recursively search directories
+# listed in `LD_LIBRARY_PATH`. Yuck.
+ln -rsf "$VENDOR_DIR/lib/x86_64-linux-gnu/libmysqlclient.so.20" "$VENDOR_DIR/lib/libmysqlclient.so.20"
+
+# Ideally we'd just use the standalone Connector/C library instead of the
+# libmysqlclient packages, however the latest release is too old:
+#   http://bugs.mysql.com/bug.php?id=82448
+# The Connector/C release has a flatter directory structure, saving the need to
+# use `--strip-components`, plus its `mysql_config` doesn't insist on the
+# `x86_64-linux-gnu` directory, which would save having to make the symlink.
+# When a new Connector/C release is available, all of the above can be replaced by:
+#   CONNECTOR_C_URL="https://cdn.mysql.com/Downloads/Connector-C/mysql-connector-c-6.1.6-linux-glibc2.5-x86_64.tar.gz"
+#   curl -s "$CONNECTOR_C_URL" | tar -xz --strip-components=1 --no-anchored -C "$VENDOR_DIR" bin/ include/ lib/
