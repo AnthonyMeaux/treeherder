@@ -20,27 +20,14 @@ matrix:
       cache:
         directories:
           - ~/venv
-      services:
-        - rabbitmq
-        - memcached
       before_install:
-        - env
-        - mkdir -p /etc/mysql/conf.d
         - echo -e '\n[mysqld]\nsql_mode="STRICT_ALL_TABLES"\n' | sudo tee -a /etc/mysql/my.cnf
-        - sudo dpkg -l
-        - sudo apt-get install libaio1
-        - curl https://cdn.mysql.com/Downloads/MySQL-5.6/mysql-community-server_5.6.32-1ubuntu14.04_amd64.deb -o ~/mysql-server.deb
-        - curl https://cdn.mysql.com/Downloads/MySQL-5.6/mysql-common_5.6.32-1ubuntu14.04_amd64.deb -o ~/mysql-common.deb
-        - curl https://download.elastic.co/elasticsearch/release/org/elasticsearch/distribution/deb/elasticsearch/2.3.3/elasticsearch-2.3.3.deb -o ~/elasticsearch.deb
-        - sudo dpkg -i --force-confnew ~/*.deb
-        - sudo service mysql status || true
-        - sudo service elasticsearch status || true
-        - mysql --version || true
-        - mysqld --version || true
-        - sudo service elasticsearch restart
-        - while ! curl localhost:9200 &>/dev/null; do sleep 1; done
-        - sudo service mysql restart
-        - mysql -u root -e 'SHOW GRANTS'
+        - sudo apt-get -yqq install libaio1
+        - curl -sS https://cdn.mysql.com/Downloads/MySQL-5.6/mysql-community-server_5.6.32-1ubuntu14.04_amd64.deb -o ~/mysql-server.deb
+        - curl -sS https://cdn.mysql.com/Downloads/MySQL-5.6/mysql-common_5.6.32-1ubuntu14.04_amd64.deb -o ~/mysql-common.deb
+        - curl -sS https://download.elastic.co/elasticsearch/release/org/elasticsearch/distribution/deb/elasticsearch/2.3.3/elasticsearch-2.3.3.deb -o ~/elasticsearch.deb
+        - sudo dpkg --force-confnew -i ~/*.deb
+        - sudo service elasticsearch start
         # Create a clean virtualenv rather than using the one given to us,
         # to work around: https://github.com/travis-ci/travis-ci/issues/4873
         - if [[ ! -f ~/venv/bin/activate ]]; then virtualenv -p python ~/venv; fi
@@ -50,6 +37,8 @@ matrix:
         - mysql -u root -e 'create database test_treeherder;'
       install:
         - pip install --disable-pip-version-check --require-hashes -r requirements/common.txt -r requirements/dev.txt
+      before_script:
+        - while ! curl localhost:9200 &>/dev/null; do sleep 1; done
       script:
         # Several security features in settings.py (eg setting HSTS headers) are conditional on
         # 'https://' being in the site URL. In addition, we override the test environment's debug
