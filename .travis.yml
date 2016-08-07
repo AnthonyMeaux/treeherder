@@ -9,50 +9,6 @@ matrix:
   include:
     # Each entry here creates another sub-job.
 
-    # Job 1: Linters
-    - env: linters
-      sudo: false
-      language: python
-      python: "2.7.11"
-      cache:
-        directories:
-          - ~/venv
-          - node_modules
-      before_install:
-        # Create a clean virtualenv rather than using the one given to us,
-        # to work around: https://github.com/travis-ci/travis-ci/issues/4873
-        - if [[ ! -f ~/venv/bin/activate ]]; then virtualenv -p python ~/venv; fi
-        - source ~/venv/bin/activate
-        - pip install --disable-pip-version-check --upgrade pip==8.1.1
-      install:
-        - npm install
-        - pip install --disable-pip-version-check --require-hashes -r requirements/common.txt -r requirements/dev.txt
-      script:
-        - grunt checkjs
-        - python lints/queuelint.py
-        - flake8 --show-source
-        - isort --check-only --diff --quiet
-
-    # Job 2: Nodejs UI tests
-    - env: ui-tests
-      sudo: false
-      language: node_js
-      node_js: "6.2.0"
-      cache:
-        # Note: This won't re-use the same cache as the linters job,
-        # since caches are tied to the language/version combination.
-        directories:
-          - node_modules
-      install:
-        - npm install
-      before_script:
-        # Required for Karma tests (http://docs.travis-ci.com/user/gui-and-headless-browsers/)
-        - export DISPLAY=:99.0
-        - sh -e /etc/init.d/xvfb start
-      script:
-        - npm test
-        - ./node_modules/.bin/grunt build --production
-
     # Job 3: Python Tests Chunk A
     - env: python-tests-main
       # Once mysql 5.6 is available on the container infra, we should switch back
@@ -64,17 +20,27 @@ matrix:
       cache:
         directories:
           - ~/venv
-      addons:
-        apt:
-          packages:
-            # Install mysql 5.6 since the default is v5.5.
-            - mysql-server-5.6
       services:
         - rabbitmq
         - memcached
       before_install:
         - env
-        - curl -o ~/elasticsearch-2.3.3.deb https://download.elastic.co/elasticsearch/release/org/elasticsearch/distribution/deb/elasticsearch/2.3.3/elasticsearch-2.3.3.deb && sudo dpkg -i --force-confnew ~/elasticsearch-2.3.3.deb
+        - which elasticsearch || true
+        - mysql --version || true
+        - mysqld --version || true
+        - dpkg --status mysql || true
+        - dpkg --status mysqld || true
+        - dpkg --status elasticsearch || true
+        - sudo service mysql status || true
+        - sudo service elasticsearch status || true
+        - curl https://cdn.mysql.com/Downloads/MySQL-5.6/mysql-community-server_5.6.32-1ubuntu14.04_amd64.deb -o ~/mysql-server.deb
+        - curl https://cdn.mysql.com/Downloads/MySQL-5.6/mysql-common_5.6.32-1ubuntu14.04_amd64.deb -o ~/mysql-common.deb
+        - curl https://download.elastic.co/elasticsearch/release/org/elasticsearch/distribution/deb/elasticsearch/2.3.3/elasticsearch-2.3.3.deb -o ~/elasticsearch.deb
+        - sudo dpkg -i ~/*.deb
+        - sudo service mysql status || true
+        - sudo service elasticsearch status || true
+        - mysql --version || true
+        - mysqld --version || true
         - sudo service elasticsearch restart
         - while ! curl localhost:9200 &>/dev/null; do sleep 1; done
         - echo -e '\n[mysqld]\nsql_mode="STRICT_ALL_TABLES"\n' | sudo tee -a /etc/mysql/my.cnf
@@ -98,89 +64,3 @@ matrix:
         # The pipefail ensures exceptions during the command still cause the step to fail.
         - set -o pipefail; SITE_URL='https://treeherder.dev' TREEHERDER_DEBUG='False' ./manage.py check --deploy 2>&1 | awk '/^WARNINGS/{err=1} {print} END{exit err}'
         - py.test tests/ --runslow --ignore=tests/e2e/ --ignore=tests/etl/ --ignore=tests/log_parser/ --ignore=tests/webapp/
-
-    # Job 4: Python Tests Chunk B
-    - env: python-tests-e2e-etl-logparser
-      # Once mysql 5.6 is available on the container infra, we should switch back
-      # to it for its faster boot time, by setting `sudo: false`.
-      sudo: required
-      dist: trusty
-      language: python
-      python: "2.7.11"
-      cache:
-        directories:
-          - ~/venv
-      addons:
-        apt:
-          packages:
-            # Install mysql 5.6 since the default is v5.5.
-            - mysql-server-5.6
-            - mysql-client-core-5.6
-      services:
-        - rabbitmq
-        - memcached
-      before_install:
-        - env
-        - curl -o ~/elasticsearch-2.3.3.deb https://download.elastic.co/elasticsearch/release/org/elasticsearch/distribution/deb/elasticsearch/2.3.3/elasticsearch-2.3.3.deb && sudo dpkg -i --force-confnew ~/elasticsearch-2.3.3.deb
-        - sudo service elasticsearch restart
-        - while ! curl localhost:9200 &>/dev/null; do sleep 1; done
-        - echo -e '\n[mysqld]\nsql_mode="STRICT_ALL_TABLES"\n' | sudo tee -a /etc/mysql/my.cnf
-        - sudo service mysql restart
-        # Create a clean virtualenv rather than using the one given to us,
-        # to work around: https://github.com/travis-ci/travis-ci/issues/4873
-        - if [[ ! -f ~/venv/bin/activate ]]; then virtualenv -p python ~/venv; fi
-        - source ~/venv/bin/activate
-        - pip install --disable-pip-version-check --upgrade pip==8.1.1
-      install:
-        - pip install --disable-pip-version-check --require-hashes -r requirements/common.txt -r requirements/dev.txt
-      script:
-        - py.test tests/e2e/ tests/etl/ tests/log_parser/ --runslow
-
-    # Job 5: Python Tests Chunk C
-    - env: python-tests-webapp
-      # Once mysql 5.6 is available on the container infra, we should switch back
-      # to it for its faster boot time, by setting `sudo: false`.
-      sudo: required
-      dist: trusty
-      language: python
-      python: "2.7.11"
-      cache:
-        directories:
-          - ~/venv
-      addons:
-        apt:
-          packages:
-            # Install mysql 5.6 since the default is v5.5.
-            - mysql-server-5.6
-      services:
-        - rabbitmq
-        - memcached
-      before_install:
-        - env
-        - curl -o ~/elasticsearch-2.3.3.deb https://download.elastic.co/elasticsearch/release/org/elasticsearch/distribution/deb/elasticsearch/2.3.3/elasticsearch-2.3.3.deb && sudo dpkg -i --force-confnew ~/elasticsearch-2.3.3.deb
-        - sudo service elasticsearch restart
-        - while ! curl localhost:9200 &>/dev/null; do sleep 1; done
-        - echo -e '\n[mysqld]\nsql_mode="STRICT_ALL_TABLES"\n' | sudo tee -a /etc/mysql/my.cnf
-        - sudo service mysql restart
-        # Create a clean virtualenv rather than using the one given to us,
-        # to work around: https://github.com/travis-ci/travis-ci/issues/4873
-        - if [[ ! -f ~/venv/bin/activate ]]; then virtualenv -p python ~/venv; fi
-        - source ~/venv/bin/activate
-        - pip install --disable-pip-version-check --upgrade pip==8.1.1
-      install:
-        - pip install --disable-pip-version-check --require-hashes -r requirements/common.txt -r requirements/dev.txt
-      script:
-        - py.test tests/webapp/ --runslow
-
-notifications:
-  email:
-    on_success: never
-    on_failure: always
-
-# Do not run these on the travis server at this time.
-# The end to end tests require the service to be running, but travis can't
-# start the service for us.  So we would have to have the default point to
-# a dedicated dev service instance that is reach-able by travis.  However, we
-# require /etc/hosts to have an entry at this point to reach our current dev
-# server.  So these tests should be run only locally for now.
-# - karma start config/karma-e2e.conf.js --reporters=dots --browsers=Firefox
